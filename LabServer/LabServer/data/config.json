@@ -1,0 +1,8 @@
+{
+  "ap_ssid": "COAL_Lab_Server",
+  "ap_pass": "lab12345",
+  "sta_type": "standard",
+  "sta_ssid": "Sweet-2G",
+  "sta_email": "",
+  "sta_pass": "123456789"
+}

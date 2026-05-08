@@ -1,0 +1,787 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>COAL Lab — LabLink</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;600;700&display=swap');
+
+    :root {
+      --bg:        #0d1117;
+      --surface:   #161b22;
+      --border:    #30363d;
+      --accent:    #58a6ff;
+      --accent2:   #3fb950;
+      --warn:      #d29922;
+      --danger:    #f85149;
+      --text:      #e6edf3;
+      --muted:     #8b949e;
+      --mono:      'IBM Plex Mono', monospace;
+      --sans:      'IBM Plex Sans', sans-serif;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: var(--sans);
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── HEADER ── */
+    header {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 0 20px;
+      height: 52px;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .logo {
+      font-family: var(--mono);
+      font-size: 1rem;
+      font-weight: 600;
+      color: var(--accent);
+      letter-spacing: 0.05em;
+    }
+    .logo span { color: var(--muted); }
+    .status-bar { display: flex; gap: 12px; align-items: center; }
+    .dot {
+      display: inline-block;
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: var(--border);
+    }
+    .dot.on  { background: var(--accent2); box-shadow: 0 0 6px var(--accent2); }
+    .dot.off { background: var(--danger); }
+    .dot-label { font-size: 0.75rem; color: var(--muted); font-family: var(--mono); }
+    .role-pill {
+      font-size: 0.72rem;
+      font-family: var(--mono);
+      font-weight: 600;
+      padding: 3px 10px;
+      border-radius: 20px;
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--muted);
+    }
+    .role-pill.admin   { border-color: var(--warn);    color: var(--warn);    }
+    .role-pill.student { border-color: var(--accent2); color: var(--accent2); }
+
+    /* ── LAYOUT ── */
+    main {
+      flex: 1;
+      margin-top: 52px;
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+      padding: 36px 16px;
+    }
+    .card {
+      width: 100%;
+      max-width: 460px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .card-head {
+      padding: 20px 24px 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    .card-head h1 {
+      font-size: 1.25rem;
+      font-weight: 700;
+      margin-bottom: 4px;
+    }
+    .card-head p { font-size: 0.875rem; color: var(--muted); }
+    .card-body { padding: 20px 24px; }
+    .hidden { display: none !important; }
+
+    /* ── INPUTS + BUTTONS ── */
+    label {
+      display: block;
+      font-size: 0.78rem;
+      font-weight: 600;
+      color: var(--muted);
+      margin-bottom: 5px;
+      margin-top: 14px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    input, select {
+      width: 100%;
+      padding: 9px 12px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 0.9rem;
+    }
+    input:focus, select:focus { outline: none; border-color: var(--accent); }
+    input[type=file] { font-family: var(--sans); font-size: 0.85rem; }
+
+    button {
+      display: block;
+      width: 100%;
+      margin-top: 10px;
+      padding: 10px 16px;
+      border: none;
+      border-radius: 6px;
+      font-family: var(--sans);
+      font-size: 0.92rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity .15s, filter .15s;
+    }
+    button:hover { filter: brightness(1.12); }
+    button:active { opacity: 0.8; }
+    .btn-primary  { background: var(--accent);  color: #0d1117; }
+    .btn-ghost    { background: transparent; border: 1px solid var(--border); color: var(--text); }
+    .btn-danger   { background: var(--danger); color: #fff; width: auto; padding: 5px 12px; font-size: 0.8rem; margin: 0; }
+    .btn-warn     { background: var(--warn); color: #0d1117; }
+    .btn-success  { background: var(--accent2); color: #0d1117; }
+    .btn-row { display: flex; gap: 8px; }
+    .btn-row button { flex: 1; }
+
+    /* ── FILE LIST ── */
+    .file-list { list-style: none; margin: 12px 0; }
+    .file-item {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 12px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      margin-bottom: 6px;
+    }
+    .file-meta { flex: 1; min-width: 0; }
+    .file-name {
+      font-family: var(--mono);
+      font-size: 0.85rem;
+      font-weight: 600;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .file-sub { font-size: 0.72rem; color: var(--muted); margin-top: 2px; }
+    .file-sub span { margin-right: 10px; }
+    a.dl-btn {
+      font-size: 0.8rem;
+      font-weight: 600;
+      font-family: var(--mono);
+      color: var(--accent);
+      text-decoration: none;
+      padding: 4px 10px;
+      border: 1px solid var(--accent);
+      border-radius: 4px;
+      white-space: nowrap;
+      flex-shrink: 0;
+      margin-left: 10px;
+    }
+    a.dl-btn:hover { background: var(--accent); color: #0d1117; }
+
+    /* ── SECTION DIVIDERS ── */
+    .section-label {
+      font-size: 0.72rem;
+      font-weight: 600;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      padding-bottom: 6px;
+      border-bottom: 1px solid var(--border);
+      margin: 20px 0 10px;
+    }
+
+    /* ── UPLOAD AREA ── */
+    .upload-box {
+      background: var(--bg);
+      border: 1px dashed var(--border);
+      border-radius: 6px;
+      padding: 14px;
+      margin-bottom: 6px;
+    }
+
+    /* ── ALERT / STATUS ── */
+    .alert {
+      font-size: 0.82rem;
+      padding: 9px 12px;
+      border-radius: 6px;
+      margin-top: 10px;
+      display: none;
+      font-family: var(--mono);
+    }
+    .alert.show { display: block; }
+    .alert.ok   { background: rgba(63,185,80,.15); border: 1px solid var(--accent2); color: var(--accent2); }
+    .alert.err  { background: rgba(248,81,73,.15);  border: 1px solid var(--danger);  color: var(--danger); }
+
+    /* ── STATUS CARDS ── */
+    .stat-row { display: flex; gap: 8px; margin-top: 10px; }
+    .stat-card {
+      flex: 1;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px 12px;
+      text-align: center;
+    }
+    .stat-val { font-family: var(--mono); font-size: 1.4rem; font-weight: 600; }
+    .stat-key { font-size: 0.7rem; color: var(--muted); margin-top: 2px; text-transform: uppercase; }
+    .empty-msg { color: var(--muted); font-size: 0.85rem; text-align: center; padding: 20px 0; }
+
+    /* ── SETTINGS ── */
+    .settings-group {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 12px 14px;
+      margin-bottom: 10px;
+    }
+    .settings-group h4 {
+      font-size: 0.82rem;
+      font-weight: 600;
+      color: var(--accent);
+      margin-bottom: 2px;
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div class="logo">LabLink <span>/ COAL Lab</span></div>
+    <div class="status-bar">
+      <span class="dot" id="dot-sta" title="STA Status"></span>
+      <span class="dot-label">STA</span>
+      <span class="dot on" id="dot-ap"  title="AP Status"></span>
+      <span class="dot-label">AP</span>
+      <span class="role-pill" id="role-pill">—</span>
+    </div>
+  </header>
+
+  <main>
+    <div class="card">
+
+      <!-- ═══════ LANDING ═══════ -->
+      <div id="view-landing">
+        <div class="card-head">
+          <h1>Connect to Lab Server</h1>
+          <p>Select your role to continue</p>
+        </div>
+        <div class="card-body">
+          <div class="stat-row" id="stat-row">
+            <div class="stat-card">
+              <div class="stat-val" id="stat-clients">—</div>
+              <div class="stat-key">Online</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-val" id="stat-files">—</div>
+              <div class="stat-key">Files</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-val" id="stat-mode">AP</div>
+              <div class="stat-key">Mode</div>
+            </div>
+          </div>
+          <button class="btn-success" style="margin-top:20px" onclick="enterStudent()">Student — Browse Files</button>
+          <button class="btn-ghost" onclick="showView('view-login')">Teacher Login</button>
+        </div>
+      </div>
+
+      <!-- ═══════ LOGIN ═══════ -->
+      <div id="view-login" class="hidden">
+        <div class="card-head">
+          <h1>Teacher Login</h1>
+          <p>Enter your admin PIN to manage files</p>
+        </div>
+        <div class="card-body">
+          <label>Admin PIN</label>
+          <input type="password" id="pin-input" placeholder="••••" onkeydown="if(event.key==='Enter')doLogin()">
+          <div class="alert" id="login-alert"></div>
+          <div class="btn-row" style="margin-top:14px">
+            <button class="btn-primary" onclick="doLogin()">Login</button>
+            <button class="btn-ghost" onclick="showView('view-landing')">Back</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ═══════ STUDENT ═══════ -->
+      <div id="view-student" class="hidden">
+        <div class="card-head">
+          <h1>Lab Manuals</h1>
+          <p>Tap Download — no login required</p>
+        </div>
+        <div class="card-body">
+          <div class="section-label">Available Files</div>
+          <ul class="file-list" id="student-list">
+            <li class="empty-msg">Loading...</li>
+          </ul>
+          <button class="btn-ghost" onclick="resetApp()">Disconnect</button>
+        </div>
+      </div>
+
+      <!-- ═══════ ADMIN DASHBOARD ═══════ -->
+      <div id="view-admin" class="hidden">
+        <div class="card-head">
+          <h1>Dashboard</h1>
+          <p>Manage lab files and server config</p>
+        </div>
+        <div class="card-body">
+
+          <div class="section-label">Upload New File</div>
+          <div class="upload-box">
+            <input type="file" id="upload-input">
+            <button class="btn-primary" onclick="doUpload()" style="margin-top:8px">Upload to SD Card</button>
+            <div class="alert" id="upload-alert"></div>
+          </div>
+
+          <div class="section-label">Current Files</div>
+          <ul class="file-list" id="admin-list">
+            <li class="empty-msg">Loading...</li>
+          </ul>
+
+          <button class="btn-warn" onclick="showView('view-settings')">⚙ Server Settings</button>
+          <button class="btn-ghost" onclick="resetApp()">Logout</button>
+        </div>
+      </div>
+
+      <!-- ═══════ SETTINGS ═══════ -->
+      <div id="view-settings" class="hidden">
+        <div class="card-head">
+          <h1>Server Config</h1>
+          <p>Changes take effect after reboot</p>
+        </div>
+        <div class="card-body">
+
+          <div class="settings-group">
+            <h4>📶 Access Point (Hotspot)</h4>
+            <label>Hotspot Name (SSID)</label>
+            <input type="text" id="s-ap-ssid">
+            <label>Hotspot Password</label>
+            <input type="text" id="s-ap-pass">
+          </div>
+
+          <div class="settings-group">
+            <h4>🌐 Connect to Wi-Fi (STA)</h4>
+            <label>Network Type</label>
+            <select id="s-sta-type" onchange="toggleEnterprise()">
+              <option value="standard">Standard (WPA2 — Mobile Hotspot)</option>
+              <option value="enterprise">Eduroam (WPA2-Enterprise)</option>
+            </select>
+            <label>Network Name (SSID)</label>
+            <input type="text" id="s-sta-ssid" placeholder="e.g. My iPhone">
+            <div id="ent-fields" class="hidden">
+              <label>Identity / Email</label>
+              <input type="text" id="s-sta-email" placeholder="student@uni.edu.pk">
+            </div>
+            <label>Password</label>
+            <input type="password" id="s-sta-pass" placeholder="••••••••">
+          </div>
+
+          <div class="settings-group">
+            <h4>🔒 Security</h4>
+            <label>New Admin PIN</label>
+            <input type="password" id="s-new-pin" placeholder="Leave blank to keep current">
+          </div>
+
+          <div class="alert" id="settings-alert"></div>
+          <div class="btn-row" style="margin-top:14px">
+            <button class="btn-danger" onclick="saveSettings()">Save & Reboot</button>
+            <button class="btn-ghost" onclick="showView('view-admin')">Cancel</button>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </main>
+
+<script>
+/* ─────────────────────────────────────────
+   State
+───────────────────────────────────────── */
+let isAdmin  = false;
+let fileList = [];
+
+/* ─────────────────────────────────────────
+   Navigation
+───────────────────────────────────────── */
+function showView(id) {
+  document.querySelectorAll('.card > div').forEach(d => d.classList.add('hidden'));
+  document.getElementById(id).classList.remove('hidden');
+  const pill = document.getElementById('role-pill');
+  pill.className = 'role-pill';
+  if (id === 'view-admin' || id === 'view-settings') {
+    pill.classList.add('admin'); pill.textContent = 'Teacher';
+  } else if (id === 'view-student') {
+    pill.classList.add('student'); pill.textContent = 'Student';
+  } else {
+    pill.textContent = '—';
+  }
+}
+
+function resetApp() { isAdmin = false; showView('view-landing'); fetchStatus(); }
+
+/* ─────────────────────────────────────────
+   Server status fetch
+───────────────────────────────────────── */
+async function fetchStatus() {
+  try {
+    const r = await fetch('/api/status');
+    const s = await r.json();
+    document.getElementById('dot-sta').className = 'dot ' + (s.sta ? 'on' : 'off');
+    document.getElementById('stat-clients').textContent = s.clients + '/' + s.max;
+    document.getElementById('stat-mode').textContent = s.sta ? 'STA+AP' : 'AP';
+  } catch(_) {}
+}
+
+/* ─────────────────────────────────────────
+   File list fetch + render
+───────────────────────────────────────── */
+async function fetchFiles() {
+  try {
+    const r = await fetch('/api/files');
+    fileList = await r.json();
+  } catch(_) { fileList = []; }
+  renderFiles();
+}
+
+function fmt(bytes) {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1048576) return (bytes/1024).toFixed(1) + ' KB';
+  return (bytes/1048576).toFixed(1) + ' MB';
+}
+
+function renderFiles() {
+  const sList = document.getElementById('student-list');
+  const aList = document.getElementById('admin-list');
+  const fileCount = document.getElementById('stat-files');
+  if (fileCount) fileCount.textContent = fileList.length;
+
+  if (fileList.length === 0) {
+    const empty = '<li class="empty-msg">No files uploaded yet</li>';
+    sList.innerHTML = aList.innerHTML = empty;
+    return;
+  }
+
+  sList.innerHTML = '';
+  aList.innerHTML = '';
+  fileList.forEach(f => {
+    const sHTML = `<li class="file-item">
+      <div class="file-meta">
+        <div class="file-name">📄 ${f.name}</div>
+        <div class="file-sub">
+          <span>${fmt(f.size)}</span>
+          <span>🕒 ${f.time}</span>
+        </div>
+      </div>
+      <a href="/Uploads/${encodeURIComponent(f.name)}" download class="dl-btn">↓ DL</a>
+    </li>`;
+    const aHTML = `<li class="file-item">
+      <div class="file-meta">
+        <div class="file-name">📄 ${f.name}</div>
+        <div class="file-sub">
+          <span>${fmt(f.size)}</span>
+          <span>🕒 ${f.time}</span>
+        </div>
+      </div>
+      <button class="btn-danger" onclick="doDelete('${f.name}')">Delete</button>
+    </li>`;
+    sList.innerHTML += sHTML;
+    aList.innerHTML += aHTML;
+  });
+}
+
+/* ─────────────────────────────────────────
+   Student entry
+───────────────────────────────────────── */
+async function enterStudent() {
+  showView('view-student');
+  await fetchFiles();
+}
+
+/* ─────────────────────────────────────────
+   Login
+───────────────────────────────────────── */
+async function doLogin() {
+  const pin = document.getElementById('pin-input').value;
+  const alert = document.getElementById('login-alert');
+  if (!pin) { showAlert(alert, 'err', 'Enter your PIN.'); return; }
+
+  try {
+    const fd = new FormData();
+    fd.append('pin', pin);
+    const r = await fetch('/api/login', { method: 'POST', body: fd });
+    const j = await r.json();
+    if (j.ok) {
+      isAdmin = true;
+      document.getElementById('pin-input').value = '';
+      showView('view-admin');
+      await fetchFiles();
+      loadSettingsForm();
+    } else {
+      showAlert(alert, 'err', 'Wrong PIN. Try again.');
+    }
+  } catch(_) {
+    // Offline fallback — check hardcoded only in dev
+    showAlert(alert, 'err', 'Server unreachable.');
+  }
+}
+
+/* ─────────────────────────────────────────
+   Upload
+───────────────────────────────────────── */
+async function doUpload() {
+  const input = document.getElementById('upload-input');
+  const alert = document.getElementById('upload-alert');
+  if (!input.files.length) { showAlert(alert, 'err', 'Select a file first.'); return; }
+
+  const file = input.files[0];
+  const fd   = new FormData();
+  fd.append('file', file, file.name);
+
+  showAlert(alert, 'ok', '⏳ Uploading...');
+  try {
+    const r = await fetch('/api/upload', { method: 'POST', body: fd });
+    if (r.ok) {
+      showAlert(alert, 'ok', '✓ Uploaded: ' + file.name);
+      input.value = '';
+      await fetchFiles();
+    } else {
+      showAlert(alert, 'err', 'Upload failed (server error).');
+    }
+  } catch(_) {
+    showAlert(alert, 'err', 'Upload failed (network error).');
+  }
+}
+
+/* ─────────────────────────────────────────
+   Delete
+───────────────────────────────────────── */
+async function doDelete(name) {
+  if (!confirm('Delete "' + name + '" from the SD card?')) return;
+  try {
+    const r = await fetch('/api/delete?file=' + encodeURIComponent(name),
+                          { method: 'DELETE' });
+    if (r.ok) { await fetchFiles(); }
+    else alert('Delete failed.');
+  } catch(_) {
+    alert('Network error.');
+  }
+}
+
+/* ─────────────────────────────────────────
+   Settings form — pre-fill from /api/status
+───────────────────────────────────────── */
+async function loadSettingsForm() {
+  try {
+    const r = await fetch('/config.json');
+    const c = await r.json();
+    document.getElementById('s-ap-ssid').value   = c.ap_ssid  || '';
+    document.getElementById('s-ap-pass').value   = c.ap_pass  || '';
+    document.getElementById('s-sta-type').value  = c.sta_type || 'standard';
+    document.getElementById('s-sta-ssid').value  = c.sta_ssid || '';
+    document.getElementById('s-sta-email').value = c.sta_email|| '';
+    toggleEnterprise();
+  } catch(_) {}
+}
+
+function toggleEnterprise() {
+  const t = document.getElementById('s-sta-type').value;
+  const ef = document.getElementById('ent-fields');
+  if (t === 'enterprise') {
+    ef.classList.remove('hidden');
+    document.getElementById('s-sta-ssid').value = 'eduroam';
+  } else {
+    ef.classList.add('hidden');
+  }
+}
+
+async function saveSettings() {
+  const alert = document.getElementById('settings-alert');
+  const body  = {
+    ap_ssid:   document.getElementById('s-ap-ssid').value,
+    ap_pass:   document.getElementById('s-ap-pass').value,
+    sta_type:  document.getElementById('s-sta-type').value,
+    sta_ssid:  document.getElementById('s-sta-ssid').value,
+    sta_email: document.getElementById('s-sta-email').value,
+    sta_pass:  document.getElementById('s-sta-pass').value,
+    new_pin:   document.getElementById('s-new-pin').value,
+  };
+  showAlert(alert, 'ok', '⏳ Saving...');
+  try {
+    await fetch('/api/save-config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    showAlert(alert, 'ok', '✓ Saved! Server rebooting in 2s...');
+    setTimeout(resetApp, 3000);
+  } catch(_) {
+    showAlert(alert, 'ok', '✓ Saved! Server rebooting...');
+    setTimeout(resetApp, 3000);
+  }
+}
+
+/* ─────────────────────────────────────────
+   Utilities
+───────────────────────────────────────── */
+function showAlert(el, type, msg) {
+  el.className = 'alert show ' + type;
+  el.textContent = msg;
+}
+
+// Initial load
+fetchStatus();
+setInterval(fetchStatus, 5000);
+</script>
+
+
+<!-- <script>
+        let isAdmin = false; 
+        let filesOnServer = []; // Start completely empty!
+
+        function updateHeader() {
+            const roleIndicator = document.getElementById('role-indicator');
+            roleIndicator.classList.remove('role-admin', 'role-student');
+            if (isAdmin) { roleIndicator.innerText = "Teacher Mode"; roleIndicator.classList.add('role-admin'); } 
+            else if (!document.getElementById('student-view').classList.contains('hidden')) { roleIndicator.innerText = "Student Mode"; roleIndicator.classList.add('role-student'); } 
+            else { roleIndicator.innerText = "Welcome"; }
+        }
+
+        function switchView(viewId) {
+            document.querySelectorAll('.container > div').forEach(div => div.classList.add('hidden'));
+            document.getElementById(viewId).classList.remove('hidden');
+            if(viewId === 'student-view' || viewId === 'admin-view') fetchFiles(); // FETCH REAL FILES!
+            updateHeader();
+        }
+
+        function setRole(role) { if (role === 'student') { isAdmin = false; switchView('student-view'); } }
+        
+        function processLogin() {
+            const pin = document.getElementById('admin-pin').value;
+            const formData = new FormData();
+            formData.append("pin", pin);
+
+            fetch('/api/login', { method: 'POST', body: formData })
+            .then(res => res.json())
+            .then(data => {
+                if(data.ok) {
+                    isAdmin = true; 
+                    document.getElementById('admin-pin').value = ''; 
+                    switchView('admin-view');
+                } else {
+                    alert("Incorrect PIN.");
+                }
+            }).catch(err => alert("Server offline."));
+        }
+        
+        function resetApp() { isAdmin = false; switchView('landing-view'); }
+
+        function toggleStaFields() {
+            const type = document.getElementById('sta-type').value;
+            const enterpriseFields = document.getElementById('enterprise-fields');
+            const ssidInput = document.getElementById('sta-ssid');
+            if(type === 'enterprise') { enterpriseFields.classList.remove('hidden'); ssidInput.value = 'eduroam'; } 
+            else { enterpriseFields.classList.add('hidden'); }
+        }
+
+        // Fetch real files and RTC timestamps from the ESP32
+        function fetchFiles() {
+            fetch('/api/files')
+            .then(res => res.json())
+            .then(data => {
+                filesOnServer = data;
+                renderFiles();
+            }).catch(err => console.log("Failed to load files"));
+        }
+
+        function renderFiles() {
+            const studentList = document.getElementById('student-file-list');
+            const adminList = document.getElementById('admin-file-list');
+            studentList.innerHTML = ''; adminList.innerHTML = '';
+
+            if (filesOnServer.length === 0) {
+                studentList.innerHTML = '<li><span style="color:#888;">No manuals uploaded yet.</span></li>';
+                adminList.innerHTML = '<li><span style="color:#888;">No manuals uploaded yet.</span></li>';
+                return;
+            }
+
+            filesOnServer.forEach(fileObj => {
+                studentList.innerHTML += `
+                    <li>
+                        <div class="file-info">
+                            <span class="file-name">📄 ${fileObj.name}</span>
+                            <span class="file-time">🕒 ${fileObj.time}</span>
+                        </div>
+                        <a href="/Uploads/${encodeURIComponent(fileObj.name)}" download class="download-link">Download ↓</a>
+                    </li>`;
+                
+                adminList.innerHTML += `
+                    <li>
+                        <div class="file-info">
+                            <span class="file-name">📄 ${fileObj.name}</span>
+                            <span class="file-time">🕒 ${fileObj.time}</span>
+                        </div>
+                        <button class="danger" onclick="deleteFile('${fileObj.name}')">Delete</button>
+                    </li>`;
+            });
+        }
+
+        function uploadFile() {
+            const fileInput = document.getElementById('file-upload');
+            const btn = document.querySelector('button[onclick="uploadFile()"]');
+            if(fileInput.files.length === 0) return alert("Please select a file first.");
+            
+            const file = fileInput.files[0];
+            const formData = new FormData();
+            formData.append("file", file, file.name);
+
+            btn.innerText = "⏳ Uploading...";
+
+            fetch('/api/upload', { method: 'POST', body: formData })
+            .then(res => {
+                fileInput.value = ''; 
+                btn.innerText = "Upload to Server";
+                if(res.ok) {
+                    alert("Uploaded successfully!");
+                    fetchFiles(); // Refresh list to get the real RTC time
+                } else {
+                    alert("Upload failed.");
+                }
+            }).catch(err => {
+                btn.innerText = "Upload to Server";
+                alert("Upload failed due to network error.");
+            });
+        }
+
+        function deleteFile(fileName) {
+            if(!confirm(`Are you sure you want to delete ${fileName}?`)) return;
+            fetch(`/api/delete?file=${encodeURIComponent(fileName)}`, { method: 'DELETE' })
+            .then(res => fetchFiles()) 
+            .catch(err => alert("Failed to delete."));
+        }
+
+        function saveSettings() {
+            const configData = {
+                ap_ssid: document.getElementById('ap-ssid').value,
+                ap_pass: document.getElementById('ap-pass').value,
+                sta_type: document.getElementById('sta-type').value,
+                sta_ssid: document.getElementById('sta-ssid').value,
+                sta_email: document.getElementById('sta-email').value,
+                sta_pass: document.getElementById('sta-pass').value,
+                new_pin: document.getElementById('new-pin').value
+            };
+
+            fetch('/api/save-config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(configData) })
+            .then(res => triggerRebootWarning())
+            .catch(err => triggerRebootWarning()); 
+        }
+
+        function triggerRebootWarning() {
+            alert("⚠️ SETTINGS SAVED! \n\nThe server is now rebooting to apply the new Wi-Fi settings.\n\nYou will be disconnected. Please wait 10 seconds and reconnect.");
+            resetApp(); 
+        }
+    </script> -->
+</body>
+</html>

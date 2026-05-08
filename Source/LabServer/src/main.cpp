@@ -1,58 +1,63 @@
+// #include <Arduino.h>
+
+// // put function declarations here:
+// int myFunction(int, int);
+
+// void setup() {
+//   // put your setup code here, to run once:
+//   int result = myFunction(2, 3);
+// }
+
+// void loop() {
+//   // put your main code here, to run repeatedly:
+// }
+
+// // put function definitions here:
+// int myFunction(int x, int y) {
+//   return x + y;
+// }
+
 /*
  * ============================================================
  *  LabLink Server — ESP32 DevKit V1 Firmware
  *  COAL Lab, University Project
  * ============================================================
- *  SD Card REMOVED — storage now uses LittleFS (internal flash)
- *  Default WiFi credentials are hardcoded at compile time.
- *  Dynamic config can be changed at runtime via web portal.
- * ============================================================
  *  Features:
  *    • Dual-mode WiFi: AP (fast local hotspot) + STA (router/eduroam)
  *    • Async HTTP server on port 80 (AsyncTCP + ESPAsyncWebServer)
- *    • LittleFS file storage (internal ESP32 flash, no SD needed)
+ *    • SD Card file storage (SPI, FAT32)
  *    • RTC DS3231 timestamps on every upload
  *    • Captive-portal DNS so users just type "lab.local"
  *    • OLED SSD1306 128×64 status display
  *    • 4 LEDs: STA, AP, Upload, Buffer-Full
- *    • Dynamic config stored in /config.json on LittleFS
- *    • Admin PIN stored in /admin_pass.txt on LittleFS
- *    • Upload timestamps stored in /uploadTime.json on LittleFS
+ *    • Dynamic config stored in /config.json on SD
+ *    • Admin PIN stored in /admin_pass.txt on SD
+ *    • Upload timestamps stored in /uploadTime.json on SD
  * ============================================================
- *  Required Libraries (PlatformIO lib_deps):
- *    mathieucarbou/AsyncTCP, mathieucarbou/ESPAsyncWebServer,
- *    RTClib, Adafruit GFX Library, Adafruit SSD1306
- *    LittleFS comes bundled with ESP32 Arduino core ≥ 2.x
+ *  Required Libraries (install via PlatformIO / Arduino IDE):
+ *    AsyncTCP, ESPAsyncWebServer, SD, RTClib,
+ *    Adafruit_GFX, Adafruit_SSD1306, DNSServer (bundled in core)
+ *    ESP32 core ≥ 2.x (for esp_wpa2.h)
  * ============================================================
- *
- *  ── DEFAULT CREDENTIALS (edit before first flash) ──────────
- *  These are used on the very first boot (or after flash-erase).
- *  Once saved via the web portal they persist in LittleFS.
  */
-#define DEFAULT_AP_SSID   "COAL_Lab_Server"
-#define DEFAULT_AP_PASS   "lab12345"
-#define DEFAULT_STA_TYPE  "standard"        // "standard" or "enterprise"
-#define DEFAULT_STA_SSID  "Sweet-2G"        // ← your router SSID
-#define DEFAULT_STA_PASS  "123456789"       // ← your router password
-#define DEFAULT_STA_EMAIL ""               // only for enterprise/eduroam
-#define DEFAULT_ADMIN_PIN "1234"
-/*  ─────────────────────────────────────────────────────────── */
 
 #include <Arduino.h>
 #include <WiFi.h>
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
 #include <DNSServer.h>
+#include <SPI.h>
+#include <SD.h>
 #include <Wire.h>
 #include <RTClib.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
-#include <LittleFS.h>          // ← replaces SD + SPI
-#include "esp_wpa2.h"          // WPA2-Enterprise (Eduroam)
+#include "esp_wpa2.h"   // WPA2-Enterprise (Eduroam)
 
 // ─────────────────────────────────────────────
-//  PIN ASSIGNMENTS  (SD_CS pin freed — no longer used)
+//  PIN ASSIGNMENTS
 // ─────────────────────────────────────────────
+#define SD_CS        5    // SD Card Chip Select (SPI)
 #define LED_STA     13    // Green  — STA Wi-Fi connected
 #define LED_AP      14    // Blue   — AP hotspot active
 #define LED_UPLOAD  12    // Yellow — file transfer in progress
@@ -70,7 +75,7 @@
 // ─────────────────────────────────────────────
 #define DNS_PORT     53
 #define LOCAL_DOMAIN "lab.local"
-#define MAX_CLIENTS   4
+#define MAX_CLIENTS   4     // Max simultaneous AP clients
 
 // ─────────────────────────────────────────────
 //  GLOBAL OBJECTS
@@ -84,7 +89,6 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 //  RUNTIME STATE
 // ─────────────────────────────────────────────
 volatile bool uploadInProgress = false;
-String        currentUploadFile = "";
 bool          staConnected     = false;
 bool          apActive         = false;
 
@@ -102,55 +106,38 @@ struct Config {
 Config cfg;
 
 // ─────────────────────────────────────────────
-//  LITTLEFS HELPERS  (drop-in replacements for SD helpers)
+//  SD HELPERS
 // ─────────────────────────────────────────────
 
-/** Read entire file from LittleFS into a String. Returns "" on failure. */
-String fsRead(const char* path) {
-  File f = LittleFS.open(path, "r");
+/** Read entire file from SD into a String. Returns "" on failure. */
+String sdRead(const char* path) {
+  File f = SD.open(path, FILE_READ);
   if (!f) return "";
   String s = f.readString();
   f.close();
   return s;
 }
 
-/** Write a String to LittleFS, overwriting any existing content. */
-bool fsWrite(const char* path, const String& content) {
-  File f = LittleFS.open(path, "w");
+/** Write a String to SD, overwriting any existing content. */
+bool sdWrite(const char* path, const String& content) {
+  File f = SD.open(path, FILE_WRITE);
   if (!f) return false;
   f.print(content);
   f.close();
   return true;
 }
 
-/** Delete a file from LittleFS (safe to call even if not present). */
-void fsRemove(const char* path) {
-  if (LittleFS.exists(path)) LittleFS.remove(path);
-}
-
 /** Extract a JSON string value: "key":"value" */
-/** Extract a JSON string value robustly, ignoring spaces */
 String jsonGet(const String& json, const String& key) {
-  String search = "\"" + key + "\"";
-  int keyPos = json.indexOf(search);
-  if (keyPos < 0) return "";
-  
-  // Find the colon after the key
-  int colonPos = json.indexOf(':', keyPos + search.length());
-  if (colonPos < 0) return "";
-  
-  // Find the first quote after the colon (start of value)
-  int startQuote = json.indexOf('"', colonPos);
-  if (startQuote < 0) return "";
-  
-  // Find the ending quote (end of value)
-  int endQuote = json.indexOf('"', startQuote + 1);
-  if (endQuote < 0) return "";
-  
-  return json.substring(startQuote + 1, endQuote);
+  String search = "\"" + key + "\":\"";
+  int s = json.indexOf(search);
+  if (s < 0) return "";
+  s += search.length();
+  int e = json.indexOf('"', s);
+  return (e < 0) ? "" : json.substring(s, e);
 }
 
-/** Strip leading directory path from a filename */
+/** Strip leading directory path from SD filename */
 String stripPath(const String& fullName) {
   int slash = fullName.lastIndexOf('/');
   return (slash >= 0) ? fullName.substring(slash + 1) : fullName;
@@ -161,18 +148,9 @@ String stripPath(const String& fullName) {
 // ─────────────────────────────────────────────
 
 void loadConfig() {
-  String raw = fsRead("/config.json");
+  String raw = sdRead("/config.json");
   if (raw.isEmpty()) {
-    // First boot — use hardcoded defaults and persist them
-    cfg = {
-      DEFAULT_AP_SSID,
-      DEFAULT_AP_PASS,
-      DEFAULT_STA_TYPE,
-      DEFAULT_STA_SSID,
-      DEFAULT_STA_EMAIL,
-      DEFAULT_STA_PASS
-    };
-    Serial.println("[Config] No config.json found — using compiled defaults.");
+    cfg = { "COAL_Lab_Server", "lab12345", "standard", "", "", "" };
     return;
   }
   cfg.ap_ssid  = jsonGet(raw, "ap_ssid");
@@ -181,7 +159,6 @@ void loadConfig() {
   cfg.sta_ssid = jsonGet(raw, "sta_ssid");
   cfg.sta_email= jsonGet(raw, "sta_email");
   cfg.sta_pass = jsonGet(raw, "sta_pass");
-  Serial.println("[Config] Loaded from LittleFS.");
 }
 
 void saveConfig() {
@@ -192,8 +169,7 @@ void saveConfig() {
   j += "  \"sta_ssid\": \"" + cfg.sta_ssid + "\",\n";
   j += "  \"sta_email\": \""+ cfg.sta_email+ "\",\n";
   j += "  \"sta_pass\": \"" + cfg.sta_pass + "\"\n}";
-  fsWrite("/config.json", j);
-  Serial.println("[Config] Saved to LittleFS.");
+  sdWrite("/config.json", j);
 }
 
 // ─────────────────────────────────────────────
@@ -201,9 +177,8 @@ void saveConfig() {
 // ─────────────────────────────────────────────
 
 String getAdminPass() {
-  String p = fsRead("/admin_pass.txt");
+  String p = sdRead("/admin_pass.txt");
   p.trim();
-  if (p.isEmpty()) return DEFAULT_ADMIN_PIN;  // fallback to compile-time default
   return p;
 }
 
@@ -227,48 +202,21 @@ String formatTime(const DateTime& dt) {
   return String(buf);
 }
 
-/** Read uploadTime.json; returns "[]" if missing */
+/** Read uploadTime.json; returns "{}" array or "[]" if missing */
 String readUploadTimes() {
-  String raw = fsRead("/uploadTime.json");
+  String raw = sdRead("/uploadTime.json");
   raw.trim();
   return (raw.isEmpty()) ? "[]" : raw;
 }
 
 /** Append a new entry {name, time} to uploadTime.json */
-// void recordUploadTime(const String& filename) {
-//   String ts  = "Unknown";
-//   if (rtc.begin()) {
-//     DateTime now = rtc.now();
-//     ts = formatTime(now);
-//   }
-
-//   String raw = readUploadTimes();
-//   raw.trim();
-//   if (raw.endsWith("]")) raw = raw.substring(0, raw.length() - 1);
-
-//   String entry = "{\"name\":\"" + filename + "\",\"time\":\"" + ts + "\"}";
-//   if (raw == "[") {
-//     raw += entry + "]";
-//   } else {
-//     raw += "," + entry + "]";
-//   }
-//   fsWrite("/uploadTime.json", raw);
-// }
-/** Append a new entry {name, time} to uploadTime.json */
 void recordUploadTime(const String& filename) {
-  String ts = "Unknown";
-  
-  // Directly ask for the time. Do NOT call rtc.begin() here!
   DateTime now = rtc.now();
-  
-  if (now.year() > 2000) {
-    ts = formatTime(now);
-  } else {
-    Serial.println("[RTC] Warning: Invalid time read.");
-  }
+  String   ts  = formatTime(now);
 
   String raw = readUploadTimes();
   raw.trim();
+  // Pop trailing ']'
   if (raw.endsWith("]")) raw = raw.substring(0, raw.length() - 1);
 
   String entry = "{\"name\":\"" + filename + "\",\"time\":\"" + ts + "\"}";
@@ -277,12 +225,12 @@ void recordUploadTime(const String& filename) {
   } else {
     raw += "," + entry + "]";
   }
-  fsWrite("/uploadTime.json", raw);
+  sdWrite("/uploadTime.json", raw);
 }
 
 /** Remove a file's entry from uploadTime.json */
 void removeUploadTime(const String& filename) {
-  String raw     = readUploadTimes();
+  String raw = readUploadTimes();
   String rebuilt = "[";
   bool   first   = true;
   int    pos     = 0;
@@ -303,7 +251,7 @@ void removeUploadTime(const String& filename) {
     pos = objEnd;
   }
   rebuilt += "]";
-  fsWrite("/uploadTime.json", rebuilt);
+  sdWrite("/uploadTime.json", rebuilt);
 }
 
 /** Find the upload time string for a given filename */
@@ -327,39 +275,39 @@ void updateOLED() {
   display.setTextSize(1);
   display.setTextColor(WHITE);
 
+  // Row 0 — title bar
   display.fillRect(0, 0, 128, 10, WHITE);
   display.setTextColor(BLACK);
   display.setCursor(28, 1);
   display.print("LabLink Server");
   display.setTextColor(WHITE);
 
+  // Row 1 — AP status
   display.setCursor(0, 13);
   display.print("AP: ");
   display.print(apActive ? cfg.ap_ssid : "OFF");
 
+  // Row 2 — STA status
   display.setCursor(0, 23);
   display.print("STA: ");
   display.print(staConnected ? WiFi.localIP().toString() : "Disconnected");
 
+  // Row 3 — Clients
   display.setCursor(0, 33);
   display.print("Clients: ");
   display.print(clients);
   display.print("/");
   display.print(MAX_CLIENTS);
 
+  // Row 4 — Domain / local IP hint
   display.setCursor(0, 43);
   display.print("http://");
   display.print(LOCAL_DOMAIN);
 
+  // Row 5 — Upload indicator
   if (uploadInProgress) {
     display.setCursor(0, 53);
-    String displayName = " " + currentUploadFile;
-    // Truncate filename to fit on OLED (max ~18 chars with ">> uploading " prefix)
-    if (displayName.length() > 18) {
-      displayName = displayName.substring(0, 15) + "...";
-    }
-    char up = 24;
-    display.print(up + displayName);
+    display.print(">> Uploading file...");
   }
 
   display.display();
@@ -367,8 +315,8 @@ void updateOLED() {
 
 void updateLEDs() {
   int clients = WiFi.softAPgetStationNum();
-  digitalWrite(LED_STA,    staConnected     ? HIGH : LOW);
-  digitalWrite(LED_AP,     apActive         ? HIGH : LOW);
+  digitalWrite(LED_STA,    staConnected ? HIGH : LOW);
+  digitalWrite(LED_AP,     apActive     ? HIGH : LOW);
   digitalWrite(LED_UPLOAD, uploadInProgress ? HIGH : LOW);
   digitalWrite(LED_BUFFER, (clients >= MAX_CLIENTS) ? HIGH : LOW);
 }
@@ -394,6 +342,7 @@ void startWiFi() {
   }
 
   if (cfg.sta_type == "enterprise") {
+    // WPA2-Enterprise (Eduroam)
     WiFi.disconnect(true);
     esp_wifi_sta_wpa2_ent_set_identity(
       (uint8_t*)cfg.sta_email.c_str(), cfg.sta_email.length());
@@ -405,6 +354,7 @@ void startWiFi() {
     WiFi.begin(cfg.sta_ssid.c_str());
     Serial.printf("[STA] Connecting to Eduroam: %s\n", cfg.sta_ssid.c_str());
   } else {
+    // Standard WPA2
     WiFi.begin(cfg.sta_ssid.c_str(), cfg.sta_pass.c_str());
     Serial.printf("[STA] Connecting to: %s\n", cfg.sta_ssid.c_str());
   }
@@ -418,7 +368,8 @@ void startWiFi() {
 
   staConnected = (WiFi.status() == WL_CONNECTED);
   if (staConnected) {
-    Serial.printf("[STA] Connected! IP: %s\n", WiFi.localIP().toString().c_str());
+    Serial.printf("[STA] Connected! IP: %s\n",
+      WiFi.localIP().toString().c_str());
   } else {
     Serial.println("[STA] Failed — running AP-only mode.");
   }
@@ -428,20 +379,21 @@ void startWiFi() {
 //  WEB SERVER ROUTES
 // ─────────────────────────────────────────────
 
+// Shared body buffer for /api/save-config (one request at a time)
 static String configBodyBuf = "";
 
 void setupRoutes() {
 
-  // ── Static files from LittleFS ────────────────────────────────────────────
-  // Serves /index.html as the default page
-  server.serveStatic("/", LittleFS, "/").setDefaultFile("index.html");
+  // ── Static files from SD ─────────────────────────────────────────────────
+  // Serves /index.html as the default page from root
+  server.serveStatic("/", SD, "/").setDefaultFile("index.html");
   // Allow direct download of uploaded files
-  server.serveStatic("/Uploads/", LittleFS, "/Uploads/");
+  server.serveStatic("/Uploads/", SD, "/Uploads/");
 
   // ── GET /api/status ───────────────────────────────────────────────────────
   server.on("/api/status", HTTP_GET, [](AsyncWebServerRequest* req) {
-    int clients   = WiFi.softAPgetStationNum();
-    String ap_ip  = WiFi.softAPIP().toString();
+    int clients = WiFi.softAPgetStationNum();
+    String ap_ip = WiFi.softAPIP().toString();
     String sta_ip = staConnected ? WiFi.localIP().toString() : "";
     String json = "{";
     json += "\"sta\":"     + String(staConnected ? "true" : "false") + ",";
@@ -461,7 +413,7 @@ void setupRoutes() {
     String json  = "[";
     bool   first = true;
 
-    File dir = LittleFS.open("/Uploads");
+    File dir = SD.open("/Uploads");
     if (dir && dir.isDirectory()) {
       File f = dir.openNextFile();
       while (f) {
@@ -485,6 +437,7 @@ void setupRoutes() {
 
   // ── POST /api/login ───────────────────────────────────────────────────────
   server.on("/api/login", HTTP_POST, [](AsyncWebServerRequest* req) {
+    // PIN sent as URL param ?pin=xxxx  OR as form field
     String pin = "";
     if (req->hasParam("pin", true))  pin = req->getParam("pin", true)->value();
     else if (req->hasParam("pin"))   pin = req->getParam("pin")->value();
@@ -498,22 +451,25 @@ void setupRoutes() {
 
   // ── POST /api/upload ──────────────────────────────────────────────────────
   server.on("/api/upload", HTTP_POST,
+    // onRequest — fires after all file data received
     [](AsyncWebServerRequest* req) {
-      uploadInProgress = false;      currentUploadFile = "";      updateLEDs();
+      uploadInProgress = false;
+      updateLEDs();
       req->send(200, "application/json", "{\"ok\":true,\"msg\":\"Upload complete\"}");
     },
+    // onUpload — fires for each chunk of file data
     [](AsyncWebServerRequest* req,
        const String& filename, size_t index,
        uint8_t* data, size_t len, bool final) {
 
       uploadInProgress = true;
-      currentUploadFile = filename;
       updateLEDs();
       String path = "/Uploads/" + filename;
 
       if (!index) {
+        // First chunk: open (create) the file
         Serial.printf("[Upload] Start: %s\n", filename.c_str());
-        req->_tempFile = LittleFS.open(path, "w");
+        req->_tempFile = SD.open(path, FILE_WRITE);
       }
 
       if (req->_tempFile) {
@@ -525,7 +481,7 @@ void setupRoutes() {
             filename.c_str(), index + len);
         }
       } else {
-        Serial.println("[Upload] ERROR: Could not open file on LittleFS!");
+        Serial.println("[Upload] ERROR: Could not open file on SD!");
       }
     }
   );
@@ -539,20 +495,21 @@ void setupRoutes() {
     String filename = req->getParam("file")->value();
     String path     = "/Uploads/" + filename;
 
-    if (LittleFS.exists(path)) {
-      LittleFS.remove(path);
+    if (SD.exists(path)) {
+      SD.remove(path);
       removeUploadTime(filename);
       Serial.printf("[Delete] Removed: %s\n", filename.c_str());
       req->send(200, "application/json", "{\"ok\":true}");
     } else {
       req->send(404, "application/json", "{\"ok\":false,\"msg\":\"File not found\"}");
     }
- 
   });
 
   // ── POST /api/save-config (JSON body) ────────────────────────────────────
   server.on("/api/save-config", HTTP_POST,
+    // onRequest — fires after body is complete
     [](AsyncWebServerRequest* req) {
+      // Parse collected body
       cfg.ap_ssid  = jsonGet(configBodyBuf, "ap_ssid");
       cfg.ap_pass  = jsonGet(configBodyBuf, "ap_pass");
       cfg.sta_type = jsonGet(configBodyBuf, "sta_type");
@@ -562,21 +519,23 @@ void setupRoutes() {
       String newPin= jsonGet(configBodyBuf, "new_pin");
 
       saveConfig();
-      if (newPin.length() > 0) fsWrite("/admin_pass.txt", newPin);
+      if (newPin.length() > 0) sdWrite("/admin_pass.txt", newPin);
 
       req->send(200, "application/json",
         "{\"ok\":true,\"msg\":\"Saved. Rebooting in 2s...\"}");
 
       Serial.println("[Config] Saved. Scheduling reboot...");
+      // Delayed reboot using a one-shot timer
       static esp_timer_handle_t rebootTimer;
       const esp_timer_create_args_t args = {
         .callback = [](void*){ ESP.restart(); },
         .name     = "reboot"
       };
       esp_timer_create(&args, &rebootTimer);
-      esp_timer_start_once(rebootTimer, 2000000);
+      esp_timer_start_once(rebootTimer, 2000000); // 2 s
     },
-    nullptr,
+    nullptr,  // onUpload (not needed here)
+    // onBody — collect JSON body chunks
     [](AsyncWebServerRequest* req,
        uint8_t* data, size_t len, size_t index, size_t total) {
       if (index == 0) configBodyBuf = "";
@@ -586,27 +545,9 @@ void setupRoutes() {
 
   // ── Captive-portal catch-all ──────────────────────────────────────────────
   server.onNotFound([](AsyncWebServerRequest* req) {
+    // Redirect any unknown URL to the main page
     req->redirect("http://" + String(LOCAL_DOMAIN));
-    if (req->url()== "/"){
-      req->send(500, "text/plain","Error: index.html is missing.");
-      return;
-    }
-
-    String redirectUrl = "http://" + WiFi.softAPIP().toString() + "/";
-    req->redirect(redirectUrl);
   });
-  // ── Captive-portal catch-all ──────────────────────────────────────────────
-  // server.onNotFound([](AsyncWebServerRequest* req) {
-  //   // If the browser requests the root but it fails, index.html is missing
-  //   if (req->url() == "/") {
-  //     req->send(500, "text/plain", "Error: index.html is missing from LittleFS. Did you run 'Upload Filesystem Image'?");
-  //     return;
-    // }
-
-    // For all other requests (like /generate_204 from Android or /hotspot-detect from Apple)
-    // Redirect them to the local domain to trigger the captive portal popup
-  //   req->redirect("http://" + String(LOCAL_DOMAIN));
-  // });
 }
 
 // ─────────────────────────────────────────────
@@ -622,12 +563,13 @@ void setup() {
   pinMode(LED_AP,     OUTPUT); digitalWrite(LED_AP,     LOW);
   pinMode(LED_UPLOAD, OUTPUT); digitalWrite(LED_UPLOAD, LOW);
   pinMode(LED_BUFFER, OUTPUT); digitalWrite(LED_BUFFER, LOW);
+  // Blink all once as boot indicator
   for (int pin : {LED_STA, LED_AP, LED_UPLOAD, LED_BUFFER}) {
     digitalWrite(pin, HIGH); delay(80);
     digitalWrite(pin, LOW);
   }
 
-  // 2. I2C → OLED + RTC
+  // 2. I2C → OLED + RTC (shared bus)
   Wire.begin(21 /*SDA*/, 22 /*SCL*/);
 
   if (!display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR)) {
@@ -646,7 +588,7 @@ void setup() {
 
   // 3. RTC
   if (!rtc.begin()) {
-    Serial.println("[RTC] Not found — timestamps will show 'Unknown'.");
+    Serial.println("[RTC] Not found — timestamps will be unavailable.");
   } else {
     if (rtc.lostPower()) {
       Serial.println("[RTC] Lost power; setting compile-time as fallback.");
@@ -655,35 +597,37 @@ void setup() {
     Serial.printf("[RTC] Time: %s\n", formatTime(rtc.now()).c_str());
   }
 
-  // 4. LittleFS (replaces SD card entirely)
-  // NOTE: formatOnFail=true means if the flash partition is corrupt or blank,
-  //       it will be auto-formatted. Safe to leave on.
-  Serial.println("[FS] Mounting LittleFS...");
-  if (!LittleFS.begin(/*formatOnFail=*/true)) {
-    // This should never happen on a healthy ESP32
-    Serial.println("[FS] FAILED — halting.");
+  // 4. SD Card
+  Serial.println("[SD] Initializing SPI and SD card...");
+  SPI.begin(18, 19, 23, SD_CS); // SCK, MISO, MOSI, SS
+  delay(1000);
+  if (!SD.begin(SD_CS, SPI, 4000000)) {
+    Serial.println("[SD] FAILED — halting.");
     display.clearDisplay();
-    display.setCursor(10, 20);
-    display.println("LittleFS ERROR!");
-    display.println("Try re-flashing.");
+    display.setCursor(20, 25);
+    display.setTextSize(1);
+    display.println("SD CARD ERROR!");
+    display.println("1. Check wiring.");
+    display.println("1. Format FAT32.");
     display.display();
     while (true) delay(1000);
   }
-  Serial.println("[FS] LittleFS mounted OK");
+  Serial.println("[SD] Mounted OK");
 
   // Ensure required directories / files exist
-  if (!LittleFS.exists("/Uploads")) LittleFS.mkdir("/Uploads");
-  if (fsRead("/uploadTime.json").isEmpty()) fsWrite("/uploadTime.json", "[]");
+  if (!SD.exists("/Uploads"))    SD.mkdir("/Uploads");
+  if (sdRead("/uploadTime.json").isEmpty()) sdWrite("/uploadTime.json", "[]");
 
-  // 5. Load config (falls back to hardcoded defaults on first boot)
+  // 5. Load config from SD
   loadConfig();
-  Serial.printf("[Config] AP: %s  STA type: %s  STA SSID: %s\n",
+  Serial.printf("[Config] AP SSID: %s  STA type: %s  STA SSID: %s\n",
     cfg.ap_ssid.c_str(), cfg.sta_type.c_str(), cfg.sta_ssid.c_str());
 
   // 6. WiFi (AP + STA)
   startWiFi();
 
-  // 7. DNS Server
+  // 7. DNS Server — wildcards all DNS to ESP AP IP (captive portal)
+  //    This means typing "lab.local" or any address resolves to the ESP
   dnsServer.start(DNS_PORT, "*", WiFi.softAPIP());
   Serial.printf("[DNS] Started on port %d → %s\n",
     DNS_PORT, WiFi.softAPIP().toString().c_str());
@@ -698,8 +642,8 @@ void setup() {
   updateOLED();
   Serial.println("===== LabLink Ready =====");
   Serial.printf("  Open browser → http://%s\n", LOCAL_DOMAIN);
-  if (apActive)     Serial.printf("  AP:  http://%s\n", WiFi.softAPIP().toString().c_str());
-  if (staConnected) Serial.printf("  STA: http://%s\n", WiFi.localIP().toString().c_str());
+  if (apActive)      Serial.printf("  AP:  http://%s\n", WiFi.softAPIP().toString().c_str());
+  if (staConnected)  Serial.printf("  STA: http://%s\n", WiFi.localIP().toString().c_str());
 }
 
 // ─────────────────────────────────────────────
@@ -707,12 +651,14 @@ void setup() {
 // ─────────────────────────────────────────────
 
 void loop() {
+  // Process DNS captive-portal requests
   dnsServer.processNextRequest();
 
+  // Refresh OLED + LEDs every 3 seconds
   static unsigned long lastRefresh = 0;
   if (millis() - lastRefresh > 3000) {
-    lastRefresh  = millis();
-    staConnected = (WiFi.status() == WL_CONNECTED);
+    lastRefresh    = millis();
+    staConnected   = (WiFi.status() == WL_CONNECTED);
     updateLEDs();
     updateOLED();
   }
